@@ -1,0 +1,122 @@
+
+Render video jejak basah · YML
+name: Render Video
+ 
+on:
+  workflow_dispatch:
+ 
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download project ZIP
+        uses: actions/checkout@v5
+ 
+      - name: Restore cached frames and Playwright
+        id: cache-render
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            project/frames
+          key: render-frames-${{ hashFiles('jejak-basah-project.zip') }}-${{ github.run_id }}
+          restore-keys: |
+            render-frames-${{ hashFiles('jejak-basah-project.zip') }}-
+ 
+      - name: Install dependencies
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg unzip
+          mkdir -p project/frames project/out
+          unzip -o jejak-basah-project.zip -d project
+          cd project
+          if [ ! -f package.json ]; then
+            npm init -y
+          fi
+          npm install playwright
+ 
+      - name: Install Chromium
+        run: |
+          cd project
+          npx playwright install --with-deps chromium
+ 
+      - name: Build and render
+        run: |
+          set -e
+          cd project
+          mkdir -p frames out
+          node build.mjs .
+ 
+          # Pantau progres persentase dari ke-3 worker setiap 30 detik
+          TOTAL_FRAMES=1442
+          (
+            while true; do
+              COUNT=$(find frames -maxdepth 1 -type f | wc -l)
+              PCT=$(awk "BEGIN {printf \"%.1f\", ($COUNT / $TOTAL_FRAMES) * 100}")
+              echo "[PROGRESS] ${PCT}% (${COUNT}/${TOTAL_FRAMES} frames)"
+              sleep 30
+            done
+          ) &
+          WATCHER_PID=$!
+          trap "kill $WATCHER_PID 2>/dev/null || true" EXIT
+ 
+          # Fungsi worker dengan auto-restart otomatis (maksimal 3x restart per worker)
+          run_worker() {
+            local name="$1"
+            local range="$2"
+            local max_retries=3
+            local attempt=0
+ 
+            while true; do
+              if node render.mjs frames "$range"; then
+                echo "[WORKER $name] Selesai untuk rentang $range"
+                return 0
+              else
+                local code=$?
+                attempt=$((attempt + 1))
+                echo "[WORKER $name] Mati (exit code $code) pada rentang $range (percobaan restart $attempt/$max_retries)"
+                if [ "$attempt" -gt "$max_retries" ]; then
+                  echo "[WORKER $name] Melewati batas restart untuk rentang $range"
+                  return "$code"
+                fi
+                sleep 2
+              fi
+            done
+          }
+ 
+          # Jalankan 3 worker paralel (0-1441)
+          run_worker "W1" "0-480" &
+          PID1=$!
+          run_worker "W2" "481-961" &
+          PID2=$!
+          run_worker "W3" "962-1441" &
+          PID3=$!
+ 
+          wait $PID1
+          wait $PID2
+          wait $PID3
+ 
+          kill $WATCHER_PID 2>/dev/null || true
+          echo "[PROGRESS] 100.0% (${TOTAL_FRAMES}/${TOTAL_FRAMES} frames)"
+ 
+          mkdir -p out
+          bash finish.sh "Jejak basah"
+ 
+      - name: Save frames checkpoint (even on failure)
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            project/frames
+          key: render-frames-${{ hashFiles('jejak-basah-project.zip') }}-${{ github.run_id }}
+ 
+      - name: Upload video
+        uses: actions/upload-artifact@v4
+        with:
+          name: hasil-video
+          path: project/**/*.mp4
+          if-no-files-found: error
+ 
+Claude selesai menulis balasan
