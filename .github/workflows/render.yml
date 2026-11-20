@@ -1,5 +1,4 @@
 
-Render video jejak basah · YML
 name: Render Video
  
 on:
@@ -118,5 +117,4 @@ jobs:
           name: hasil-video
           path: project/**/*.mp4
           if-no-files-found: error
- 
-Claude selesai menulis balasan
+
